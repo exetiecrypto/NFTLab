@@ -1,0 +1,83 @@
+from web3 import Web3
+import requests
+import pandas as pd
+import matplotlib.pyplot as plt
+from datetime import datetime
+
+class NFTLab:
+    def __init__(self, eth_infura_url: str, etherscan_api_key: str):
+        self.web3 = Web3(Web3.HTTPProvider(eth_infura_url))
+        if not self.web3.isConnected():
+            raise Exception("Failed to connect to the Ethereum node")
+
+        self.etherscan_api_key = etherscan_api_key
+
+    # Fetch NFT Metadata
+    def get_nft_metadata(self, contract_address: str, token_id: str) -> dict:
+        contract_address = Web3.toChecksumAddress(contract_address)
+        nft_abi = [
+            {"constant": True, "inputs": [{"name": "tokenId", "type": "uint256"}], "name": "tokenURI", "outputs": [{"name": "", "type": "string"}], "payable": False, "stateMutability": "view", "type": "function"}
+        ]
+        contract = self.web3.eth.contract(address=contract_address, abi=nft_abi)
+        token_uri = contract.functions.tokenURI(token_id).call()
+        response = requests.get(token_uri)
+        metadata = response.json()
+        return metadata
+
+    # Fetch NFT Transactions
+    def get_nft_transactions(self, contract_address: str, token_id: str, start_block: int, end_block: int) -> pd.DataFrame:
+        url = f"https://api.etherscan.io/api"
+        params = {
+            'module': 'account',
+            'action': 'tokennfttx',
+            'contractaddress': contract_address,
+            'address': '',  # Leave empty to fetch all transactions for the contract address
+            'startblock': start_block,
+            'endblock': end_block,
+            'sort': 'asc',
+            'apikey': self.etherscan_api_key
+        }
+        response = requests.get(url, params=params)
+        data = response.json()
+        if data['status'] == '1':
+            transactions = data['result']
+            df = pd.DataFrame(transactions)
+            df['timeStamp'] = pd.to_datetime(df['timeStamp'], unit='s')
+            return df
+        else:
+            return pd.DataFrame()
+
+    def plot_nft_transactions(self, contract_address: str, token_id: str, start_block: int, end_block: int):
+        df = self.get_nft_transactions(contract_address, token_id, start_block, end_block)
+        if df.empty:
+            print("No transactions found.")
+            return
+
+        df['value'] = df['value'].astype(float) / (10 ** 18)  # Assuming ETH is the token
+        df.set_index('timeStamp', inplace=True)
+        df_resampled = df['value'].resample('D').sum()
+
+        plt.figure(figsize=(12, 6))
+        plt.plot(df_resampled.index, df_resampled, marker='o')
+        plt.title(f'NFT Transaction Volume for Token ID {token_id}')
+        plt.xlabel('Date')
+        plt.ylabel('Volume (ETH)')
+        plt.grid(True)
+        plt.show()
+
+# Example Usage
+if __name__ == "__main__":
+    ETH_INFURA_URL = 'https://mainnet.infura.io/v3/YOUR_INFURA_PROJECT_ID'
+    ETHERSCAN_API_KEY = 'YOUR_ETHERSCAN_API_KEY'
+    NFT_CONTRACT_ADDRESS = '0x...YourNFTContractAddress...'  # Replace with your NFT contract address
+    TOKEN_ID = '1'  # Replace with your NFT token ID
+
+    nft_lab = NFTLab(ETH_INFURA_URL, ETHERSCAN_API_KEY)
+
+    # Fetch and Display NFT Metadata
+    metadata = nft_lab.get_nft_metadata(NFT_CONTRACT_ADDRESS, TOKEN_ID)
+    print("NFT Metadata:")
+    print(metadata)
+
+    # Plot NFT Transactions
+    nft_lab.plot_nft_transactions(NFT_CONTRACT_ADDRESS, TOKEN_ID, start_block=10000000, end_block=10000010)
